@@ -1,11 +1,11 @@
 models:
   scanner:
     provider: anthropic
-    model: anthropic/claude-sonnet-4-6
+    model: anthropic/claude-opus-4-8
     max_tokens: 500
-    temperature: 0.2
-    cost_per_1k_input: 0.003
-    cost_per_1k_output: 0.015
+    # Opus 4.8 deprecated the temperature parameter; omit it (API rejects it).
+    cost_per_1k_input: 0.005
+    cost_per_1k_output: 0.025
 
   analyst:
     provider: anthropic
@@ -25,11 +25,11 @@ models:
 
   reviewer:
     provider: anthropic
-    model: anthropic/claude-sonnet-4-6
+    model: anthropic/claude-opus-4-8
     max_tokens: 1500
-    temperature: 0.3
-    cost_per_1k_input: 0.003
-    cost_per_1k_output: 0.015
+    # Opus 4.8 deprecated the temperature parameter; omit it (API rejects it).
+    cost_per_1k_input: 0.005
+    cost_per_1k_output: 0.025
 
   chart_analyst:
     provider: anthropic
@@ -48,12 +48,17 @@ models:
     cost_per_1k_output: 0.015
 
   critic:
-    provider: anthropic
-    model: anthropic/claude-sonnet-4-6
-    max_tokens: 350
-    temperature: 0.2
-    cost_per_1k_input: 0.003
-    cost_per_1k_output: 0.015
+    # Cross-family second opinion: the adversarial critic runs on OpenAI
+    # gpt-5 (a different lab than detection/synthesis) so a VETO reflects a
+    # genuinely independent model, not Anthropic critiquing itself.
+    # gpt-5 is a reasoning model: needs max_completion_tokens and default
+    # temperature (the orchestrator handles both); the limit is generous to
+    # leave room for hidden reasoning tokens before the small JSON output.
+    provider: openai
+    model: openai/gpt-5
+    max_tokens: 1500
+    cost_per_1k_input: 0.00125
+    cost_per_1k_output: 0.010
 
 cost_controls:
   daily_budget_usd: 5.00

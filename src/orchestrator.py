@@ -85,8 +85,7 @@ class TalonOrchestrator:
         model_id = model_name.replace("openai/", "")
         try:
             response = self.openai_client.chat.completions.create(
-                model=model_id, messages=messages,
-                max_tokens=max_tokens, temperature=temperature,
+                **self._openai_kwargs(model_id, messages, max_tokens, temperature)
             )
             choice = response.choices[0] if response.choices else None
             usage = response.usage
@@ -100,6 +99,25 @@ class TalonOrchestrator:
         except Exception:
             logger.exception("OpenAI call failed for %s", model_name)
             return None
+
+    @staticmethod
+    def _is_openai_reasoning(model_id: str) -> bool:
+        """The gpt-5 and o-series reasoning models require
+        `max_completion_tokens` and only accept the default temperature."""
+        m = model_id.lower()
+        return m.startswith(("gpt-5", "o1", "o3", "o4"))
+
+    def _openai_kwargs(self, model_id, messages, max_tokens, temperature) -> dict:
+        """Build chat.completions kwargs, adapting to reasoning models."""
+        kwargs: dict = {"model": model_id, "messages": messages}
+        if self._is_openai_reasoning(model_id):
+            # Reasoning models: max_completion_tokens, no custom temperature.
+            kwargs["max_completion_tokens"] = max_tokens
+        else:
+            kwargs["max_tokens"] = max_tokens
+            if temperature is not None and temperature > 0:
+                kwargs["temperature"] = temperature
+        return kwargs
 
     def _call_anthropic(self, model_name, messages, max_tokens, temperature):
         if not ANTHROPIC_API_KEY:
@@ -284,8 +302,7 @@ class TalonOrchestrator:
         })
         try:
             response = self.openai_client.chat.completions.create(
-                model=model_id, messages=messages,
-                max_tokens=max_tokens, temperature=temperature,
+                **self._openai_kwargs(model_id, messages, max_tokens, temperature)
             )
             choice = response.choices[0] if response.choices else None
             usage = response.usage
