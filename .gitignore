@@ -1,0 +1,25 @@
+# Secrets — never commit
+.env
+
+# Runtime data, databases, generated state, reports
+data/
+logs/
+*.db
+*.db-wal
+*.db-shm
+*.pid
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

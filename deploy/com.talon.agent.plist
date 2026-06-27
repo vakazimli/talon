@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.talon.agent</string>
+
+    <!--
+      Run Talon under `caffeinate -i` so macOS does not idle-sleep the
+      process out from under the scheduler during market hours (the cause
+      of the May 5 stoppage: a sleeping laptop missed every scan slot).
+      KeepAlive restarts it if it ever exits/crashes; RunAtLoad starts it
+      at login. The single-instance guard in src/main.py safely replaces
+      any duplicate process.
+    -->
+    <key>ProgramArguments</key>
+    <array>
+        <string>/usr/bin/caffeinate</string>
+        <string>-i</string>
+        <string>/Users/vagifkazimli/openClaw/.venv/bin/python</string>
+        <string>-m</string>
+        <string>src.main</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>/Users/vagifkazimli/openClaw/talon</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>PYTHONUNBUFFERED</key>
+        <string>1</string>
+    </dict>
+
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>/Users/vagifkazimli/openClaw/talon/logs/launchd_stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/vagifkazimli/openClaw/talon/logs/launchd_stderr.log</string>
+</dict>
+</plist>

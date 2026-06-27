@@ -1,0 +1,86 @@
+system:
+  mode: shadow  # shadow = log only, paper = simulated trades, live = real alerts
+  timezone: America/New_York
+
+watchlist:
+  tier1:  # Scan every cycle
+    - SPY
+    - QQQ
+    - IWM
+  tier2:  # Scan every other cycle
+    - NVDA
+    - AAPL
+    - MSFT
+    - AMZN
+    - META
+    - AMD
+    - TSLA
+
+scanning:
+  market_hours_only: true
+  scan_interval_minutes: 30
+  pre_market_scan: "09:00"
+  intraday_scans: ["09:45", "10:00", "11:00", "13:00", "14:30", "15:00"]
+  post_market_review: "16:15"
+
+options:
+  min_open_interest: 100
+  min_volume: 50
+  # Swing window: weekly-to-biweekly contracts held 1-3 trading days, so
+  # theta decay is manageable (avoid the 0DTE/1DTE theta-burn lottery).
+  max_dte: 14
+  min_dte: 4
+  max_spread_pct: 15
+  # More directional (ITM-ish) contracts for multi-day holds, not cheap OTM.
+  preferred_delta_range: [0.35, 0.60]
+  max_contract_price: 8.00
+
+scoring:
+  # High-conviction only: raised floors so it alerts sparingly.
+  min_score_to_alert: 72
+  min_score_to_alert_shadow: 62
+  weights:
+    technical_setup: 0.40
+    source_reliability: 0.15
+    risk_reward: 0.30
+    news_catalyst: 0.15
+
+alerts:
+  max_alerts_per_day: 3
+  cooldown_minutes: 60
+  # Only deliver cards the synthesizer rates >= this (1-5 conviction scale).
+  min_confidence: 4
+
+synthesis:
+  # Code derives target/stop from the option's real mid (the LLM never
+  # supplies dollar values). Base fractions are scaled by the option's IV
+  # (vs reference_iv) within the min/max bounds, so a jumpy name gets wider
+  # bands than a calm one. All deterministic and code-owned.
+  target_pct: 0.30
+  stop_pct: 0.30
+  reference_iv: 0.30
+  target_pct_min: 0.20
+  target_pct_max: 0.45
+  stop_pct_min: 0.20
+  stop_pct_max: 0.40
+
+critic:
+  # Adversarial bear-case review of each synthesized card before alerting.
+  # VETO drops the alert; CAUTION lowers confidence by 1 (may fail the gate).
+  enabled: true
+
+risk:
+  # Circuit breakers pause ALERTING (Talon never executes trades) and
+  # auto-reset each new trading day. Manual reset via /risk reset.
+  max_open_positions: 6           # exposure cap: open (unresolved) outcomes
+  daily_loss_halt_pct: -40.0      # halt if today's resolved P&L sums below this
+  consecutive_loss_halt: 4        # halt after N losers in a row
+  weekly_drawdown_halt_pct: -80.0 # halt if 7-day resolved P&L sums below this
+
+chart_analyst:
+  enabled: true              # Vision-based chart analyzer (Claude Opus 4.7).
+                             # Adds ~$0.05/alert; max 5 alerts/day.
+  pass_verdict_blocks: true  # If model verdict == "PASS", drop the alert.
+  min_chart_score: 55        # Below this, drop the alert.
+  # Treat vision price levels (entry_zone, invalidation) as advisory only;
+  # the synthesizer continues to derive actual prices from option chain.

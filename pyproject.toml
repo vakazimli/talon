@@ -1,0 +1,33 @@
+[project]
+name = "talon"
+version = "0.2.0"
+description = "Local-first, self-improving short-term options trading assistant"
+requires-python = ">=3.11"
+dependencies = [
+    "python-telegram-bot>=21.0",
+    "apscheduler>=3.10",
+    "sqlalchemy>=2.0",
+    "pandas>=2.0",
+    "ta>=0.11",
+    "yfinance>=0.2",
+    "httpx>=0.27",
+    "pyyaml>=6.0",
+    "python-dotenv>=1.0",
+    "openai>=1.0",
+    "scipy>=1.12",
+    "alpaca-py>=0.30",
+    "mplfinance>=0.12",
+    "matplotlib>=3.8",
+    "Pillow>=10.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+
+[build-system]
+requires = ["setuptools>=68.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["src*"]

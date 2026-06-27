@@ -1,0 +1,35 @@
+sources:
+  alpaca_market_data:
+    type: market_data
+    reliability_score: 0.50
+    enabled: true
+
+  alpaca_options:
+    type: options_chain
+    reliability_score: 0.50
+    enabled: true
+
+  technical_patterns:
+    type: technical
+    subtypes:
+      - breakout_above_resistance
+      - breakdown_below_support
+      - volume_spike
+      - vwap_reclaim
+      - ema_crossover
+      - squeeze_breakout
+      - gap_fill
+    reliability_score: 0.50
+
+  finnhub_news:
+    type: news
+    subtypes:
+      - news_earnings
+      - news_upgrade
+      - news_downgrade
+      - news_mna
+      - news_regulatory
+      - news_product
+      - news_macro
+    reliability_score: 0.50
+    enabled: true

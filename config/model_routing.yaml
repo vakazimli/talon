@@ -1,0 +1,65 @@
+models:
+  scanner:
+    provider: anthropic
+    model: anthropic/claude-sonnet-4-6
+    max_tokens: 500
+    temperature: 0.2
+    cost_per_1k_input: 0.003
+    cost_per_1k_output: 0.015
+
+  analyst:
+    provider: anthropic
+    model: anthropic/claude-sonnet-4-6
+    max_tokens: 800
+    temperature: 0.3
+    cost_per_1k_input: 0.003
+    cost_per_1k_output: 0.015
+
+  synthesizer:
+    provider: anthropic
+    model: anthropic/claude-opus-4-8
+    max_tokens: 800
+    # Opus 4.8 deprecated the temperature parameter; omit it (API rejects it).
+    cost_per_1k_input: 0.005
+    cost_per_1k_output: 0.025
+
+  reviewer:
+    provider: anthropic
+    model: anthropic/claude-sonnet-4-6
+    max_tokens: 1500
+    temperature: 0.3
+    cost_per_1k_input: 0.003
+    cost_per_1k_output: 0.015
+
+  chart_analyst:
+    provider: anthropic
+    model: anthropic/claude-opus-4-8
+    max_tokens: 800
+    # Opus 4.8 deprecated the temperature parameter; omit it (API rejects it).
+    cost_per_1k_input: 0.005
+    cost_per_1k_output: 0.025
+
+  news_summarizer:
+    provider: anthropic
+    model: anthropic/claude-sonnet-4-6
+    max_tokens: 400
+    temperature: 0.3
+    cost_per_1k_input: 0.003
+    cost_per_1k_output: 0.015
+
+  critic:
+    provider: anthropic
+    model: anthropic/claude-sonnet-4-6
+    max_tokens: 350
+    temperature: 0.2
+    cost_per_1k_input: 0.003
+    cost_per_1k_output: 0.015
+
+cost_controls:
+  daily_budget_usd: 5.00
+  warn_at_pct: 75
+  hard_stop_at_pct: 95
+  scanner_budget_pct: 30
+  synthesis_budget_pct: 40
+  review_budget_pct: 15
+  chart_analyst_budget_pct: 15
