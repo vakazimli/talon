@@ -458,11 +458,15 @@ class Talon:
         with get_session() as session:
             session.add(scan)
             session.flush()
+            # Capture the PK as a plain int while the instance is still bound
+            # to this session. After the session closes, `scan` is detached and
+            # any `scan.id` access raises DetachedInstanceError.
+            scan_id = scan.id
 
             for scored in scored_setups:
                 promoted = self.scoring_engine.passes_threshold(scored.score, mode)
                 db_setup = Setup(
-                    scan_id=scan.id,
+                    scan_id=scan_id,
                     ticker=scored.ticker,
                     direction=scored.direction,
                     setup_type=scored.setup_type,
@@ -502,7 +506,7 @@ class Talon:
                 filter_reasons[s.ticker + s.direction] = "breaker"
             self._record_counterfactuals(scored_setups, set(), all_setup_ids, filter_reasons)
             with get_session() as session:
-                db_scan = session.query(Scan).filter(Scan.id == scan.id).first()
+                db_scan = session.query(Scan).filter(Scan.id == scan_id).first()
                 if db_scan:
                     db_scan.alerts_sent = 0
                     db_scan.completed_at = datetime.utcnow().isoformat()
@@ -657,7 +661,7 @@ class Talon:
 
         # Update scan record
         with get_session() as session:
-            db_scan = session.query(Scan).filter(Scan.id == scan.id).first()
+            db_scan = session.query(Scan).filter(Scan.id == scan_id).first()
             if db_scan:
                 db_scan.alerts_sent = alerts_sent
                 db_scan.completed_at = datetime.utcnow().isoformat()
