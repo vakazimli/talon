@@ -719,6 +719,11 @@ class Talon:
                     contract = self._candidate_to_contract(scored.ticker, cand)
                     if contract is None:
                         continue
+                    # Same IV-scaled exits the real synthesizer would use, so
+                    # the counterfactual mirrors an actual alert's risk frame.
+                    tgt_pct, stp_pct = self.synthesizer._scaled_exit_pcts(
+                        cand, scored.technicals
+                    )
                     session.add(CounterfactualOutcome(
                         setup_id=setup_id,
                         ticker=scored.ticker,
@@ -727,8 +732,8 @@ class Talon:
                         filter_reason=filter_reasons.get(key, "not_alerted"),
                         score=scored.score,
                         entry_price=round(mid, 2),
-                        target_price=round(mid * (1 + self.synthesizer.target_pct), 2),
-                        stop_price=round(mid * (1 - self.synthesizer.stop_pct), 2),
+                        target_price=round(mid * (1 + tgt_pct), 2),
+                        stop_price=round(mid * (1 - stp_pct), 2),
                         created_at=datetime.utcnow().isoformat(),
                     ))
                     recorded += 1

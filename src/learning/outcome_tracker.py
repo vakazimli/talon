@@ -48,30 +48,80 @@ class OutcomeTracker:
             logger.info("Entry recorded for alert #%d at $%.2f", alert.id, mid)
 
     async def check_all_open_outcomes(self) -> None:
-        """Check option-contract prices for all unresolved outcomes."""
+        """Resolve unresolved alert outcomes.
+
+        Pattern: snapshot open rows -> fetch quotes with NO DB session open
+        -> apply updates in one short write session -> run source-reliability
+        updates afterwards. This avoids holding a write transaction across
+        network calls (SQLite lock contention) and avoids nested sessions.
+        """
         with get_session() as session:
-            open_outcomes = (
-                session.query(Outcome)
+            rows = (
+                session.query(Outcome, Alert)
+                .join(Alert, Alert.id == Outcome.alert_id)
                 .filter(Outcome.resolved_at.is_(None))
                 .filter(Outcome.entry_filled.is_(True))
                 .all()
             )
+            snaps = [
+                {
+                    "oid": o.id, "alert_id": a.id,
+                    "entry": o.actual_entry_price or 0, "contract": a.contract,
+                    "target": a.target_price or 0, "stop": a.stop_price or 0,
+                    "hold_iso": a.sent_at, "max_fav": o.max_favorable,
+                    "max_adv": o.max_adverse,
+                }
+                for (o, a) in rows
+            ]
 
-            for outcome in open_outcomes:
-                alert = session.query(Alert).filter(Alert.id == outcome.alert_id).first()
-                if not alert:
+        # Network + compute, no session held.
+        computed = []
+        for s in snaps:
+            if s["entry"] <= 0:
+                continue
+            try:
+                fields, resolved = self._evaluate(s)
+            except Exception:
+                logger.exception("Failed to evaluate outcome #%s", s["oid"])
+                continue
+            if not fields:
+                continue
+            if "resolved_at" in fields:
+                fields["hold_duration_minutes"] = self._hold_minutes(s["hold_iso"])
+            if "actual_exit_price" in fields:
+                fields["pnl_dollars"] = fields["actual_exit_price"] - s["entry"]
+            computed.append((s["oid"], s["alert_id"], fields, resolved))
+
+        # Apply in one short write session.
+        resolved_alert_ids = []
+        with get_session() as session:
+            for oid, alert_id, fields, resolved in computed:
+                o = session.query(Outcome).filter(Outcome.id == oid).first()
+                if not o:
                     continue
-
-                try:
-                    self._check_outcome(session, outcome, alert)
-                except Exception:
-                    logger.exception("Failed to check outcome for alert #%d", alert.id)
-
+                for k, v in fields.items():
+                    setattr(o, k, v)
+                if resolved:
+                    resolved_alert_ids.append(alert_id)
             session.commit()
 
+        # Source-reliability updates (each opens its own short session).
+        for alert_id in resolved_alert_ids:
+            try:
+                with get_session() as session:
+                    alert = session.query(Alert).filter(Alert.id == alert_id).first()
+                    outcome = (
+                        session.query(Outcome)
+                        .filter(Outcome.alert_id == alert_id).first()
+                    )
+                if alert is not None and outcome is not None:
+                    self.source_evaluator.update_from_outcome(alert, outcome)
+            except Exception:
+                logger.exception("Source update failed for alert #%s", alert_id)
+
     async def check_all_open_counterfactuals(self) -> None:
-        """Resolve shadow (counterfactual) outcomes for non-alerted setups,
-        using the same target/stop/expiry/time-exit logic as real outcomes."""
+        """Resolve shadow (counterfactual) outcomes — same snapshot/network/
+        write discipline as real outcomes."""
         from src.db.models import CounterfactualOutcome
         with get_session() as session:
             rows = (
@@ -79,116 +129,94 @@ class OutcomeTracker:
                 .filter(CounterfactualOutcome.resolved_at.is_(None))
                 .all()
             )
-            for cf in rows:
-                try:
-                    self._check_counterfactual(cf)
-                except Exception:
-                    logger.exception("Failed to check counterfactual #%s", cf.id)
+            snaps = [
+                {
+                    "oid": cf.id, "entry": cf.entry_price or 0, "contract": cf.contract,
+                    "target": cf.target_price or 0, "stop": cf.stop_price or 0,
+                    "hold_iso": cf.created_at, "max_fav": cf.max_favorable,
+                    "max_adv": cf.max_adverse,
+                }
+                for cf in rows
+            ]
+
+        computed = []
+        for s in snaps:
+            if s["entry"] <= 0:
+                continue
+            try:
+                fields, _resolved = self._evaluate(s)
+            except Exception:
+                logger.exception("Failed to evaluate counterfactual #%s", s["oid"])
+                continue
+            if fields:
+                computed.append((s["oid"], fields))
+
+        with get_session() as session:
+            for oid, fields in computed:
+                cf = session.query(CounterfactualOutcome).filter(
+                    CounterfactualOutcome.id == oid
+                ).first()
+                if not cf:
+                    continue
+                for k, v in fields.items():
+                    setattr(cf, k, v)
             session.commit()
 
-    def _check_counterfactual(self, cf) -> None:
-        entry = cf.entry_price or 0
-        if entry <= 0:
-            return
-        current_price = self._get_option_price(cf.contract)
-        expired = self._contract_expired(cf.contract)
+    def _evaluate(self, snap: dict) -> tuple[dict, bool]:
+        """Given a position snapshot, fetch the live option price and return
+        (fields_to_update, resolved). Shared by real + counterfactual outcomes;
+        the returned column names exist on both models. Does network I/O but
+        holds NO DB session."""
+        entry = snap["entry"]
+        contract = snap["contract"]
+        price = self._get_option_price(contract)
+        expired = self._contract_expired(contract)
 
-        if current_price is None:
+        if price is None:
             if expired:
-                cf.exit_reason = "expiry_unknown"
-                cf.resolved_at = datetime.utcnow().isoformat()
-            return
+                return {
+                    "exit_reason": "expiry_unknown",
+                    "resolved_at": datetime.utcnow().isoformat(),
+                }, False
+            return {}, False
 
-        if cf.max_favorable is None or current_price > cf.max_favorable:
-            cf.max_favorable = current_price
-        if cf.max_adverse is None or current_price < cf.max_adverse:
-            cf.max_adverse = current_price
+        prev_fav = snap.get("max_fav")
+        prev_adv = snap.get("max_adv")
+        fields: dict = {
+            "max_favorable": price if prev_fav is None else max(prev_fav, price),
+            "max_adverse": price if prev_adv is None else min(prev_adv, price),
+        }
 
-        target = cf.target_price or 0
-        stop = cf.stop_price or 0
+        target = snap["target"]
+        stop = snap["stop"]
         resolved = False
         reason = None
-        exit_price = current_price
-        if target > 0 and current_price >= target:
+        exit_price = price
+        if target > 0 and price >= target:
             resolved, reason, exit_price = True, "target", target
-        elif stop > 0 and current_price <= stop:
+        elif stop > 0 and price <= stop:
             resolved, reason, exit_price = True, "stop", stop
         elif expired:
             resolved, reason = True, "expiry"
-        elif self._iso_older_than(cf.created_at, MAX_HOLD_DAYS):
-            resolved, reason, exit_price = True, "time_exit", current_price
+        elif self._iso_older_than(snap.get("hold_iso"), MAX_HOLD_DAYS):
+            resolved, reason, exit_price = True, "time_exit", price
 
         if resolved:
-            cf.actual_exit_price = exit_price
-            cf.exit_reason = reason
-            cf.pnl_pct = ((exit_price / entry) - 1) * 100 if entry > 0 else 0
-            cf.resolved_at = datetime.utcnow().isoformat()
-            logger.info(
-                "Counterfactual #%s resolved: %s, P&L=%.1f%%",
-                cf.id, reason, cf.pnl_pct or 0,
-            )
+            fields["actual_exit_price"] = exit_price
+            fields["exit_reason"] = reason
+            fields["pnl_pct"] = ((exit_price / entry) - 1) * 100 if entry > 0 else 0
+            fields["resolved_at"] = datetime.utcnow().isoformat()
+        return fields, resolved
 
-    def _check_outcome(self, session, outcome: Outcome, alert: Alert) -> None:
-        entry = outcome.actual_entry_price or 0
-        if entry <= 0:
-            return
-
-        current_price = self._get_option_price(alert.contract)
-        expired = self._is_expired(alert)
-
-        if current_price is None:
-            if expired:
-                # No quote available and the contract has expired —
-                # record an unknown-resolution row so we stop polling it.
-                outcome.exit_reason = "expiry_unknown"
-                outcome.resolved_at = datetime.utcnow().isoformat()
-                self._set_hold_duration(outcome, alert)
-            return
-
-        if outcome.max_favorable is None or current_price > outcome.max_favorable:
-            outcome.max_favorable = current_price
-        if outcome.max_adverse is None or current_price < outcome.max_adverse:
-            outcome.max_adverse = current_price
-
-        target = alert.target_price or 0
-        stop = alert.stop_price or 0
-
-        resolved = False
-        exit_reason = None
-        exit_price = current_price
-
-        if target > 0 and current_price >= target:
-            resolved = True
-            exit_reason = "target"
-            exit_price = target
-        elif stop > 0 and current_price <= stop:
-            resolved = True
-            exit_reason = "stop"
-            exit_price = stop
-        elif expired:
-            resolved = True
-            exit_reason = "expiry"
-        elif self._held_longer_than(alert, MAX_HOLD_DAYS):
-            # Swing window elapsed without hitting target/stop — close at
-            # the current mark so the trade feeds learning on schedule.
-            resolved = True
-            exit_reason = "time_exit"
-            exit_price = current_price
-
-        if resolved:
-            outcome.actual_exit_price = exit_price
-            outcome.exit_reason = exit_reason
-            outcome.pnl_dollars = exit_price - entry
-            outcome.pnl_pct = ((exit_price / entry) - 1) * 100 if entry > 0 else 0
-            outcome.resolved_at = datetime.utcnow().isoformat()
-            self._set_hold_duration(outcome, alert)
-
-            logger.info(
-                "Outcome resolved for alert #%d: %s, P&L=%.1f%%",
-                alert.id, exit_reason, outcome.pnl_pct or 0,
-            )
-
-            self.source_evaluator.update_from_outcome(alert, outcome)
+    @staticmethod
+    def _hold_minutes(iso_str: str | None) -> int | None:
+        if not iso_str:
+            return None
+        try:
+            sent = datetime.fromisoformat(iso_str)
+        except (ValueError, TypeError):
+            return None
+        return int((datetime.utcnow() - sent).total_seconds() / 60)
 
     def _get_option_price(self, contract: str) -> float | None:
         """Live quote for the specific option contract (Tradier preferred)."""
@@ -225,11 +253,6 @@ class OutcomeTracker:
             pass
         return False
 
-    def _held_longer_than(self, alert: Alert, days: int) -> bool:
-        """True if more than `days` calendar days have elapsed since the
-        alert was sent."""
-        return self._iso_older_than(alert.sent_at, days)
-
     @staticmethod
     def _iso_older_than(iso_str: str | None, days: int) -> bool:
         """True if `iso_str` is more than `days` calendar days in the past."""
@@ -240,13 +263,3 @@ class OutcomeTracker:
         except (ValueError, TypeError):
             return False
         return (datetime.utcnow() - then).total_seconds() > days * 86400
-
-    def _set_hold_duration(self, outcome: Outcome, alert: Alert) -> None:
-        if outcome.hold_duration_minutes is None and alert.sent_at:
-            try:
-                sent = datetime.fromisoformat(alert.sent_at)
-                outcome.hold_duration_minutes = int(
-                    (datetime.utcnow() - sent).total_seconds() / 60
-                )
-            except (ValueError, TypeError):
-                pass
